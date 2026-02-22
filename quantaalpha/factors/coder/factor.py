@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 from typing import Tuple, Union
@@ -126,32 +128,34 @@ class FactorFBWorkspace(FBWorkspace):
                 raise CodeFormatError(self.FB_CODE_NOT_SET)
             else:
                 return self.FB_CODE_NOT_SET, None
-        with FileLock(self.workspace_path / "execution.lock"):
-            # Set data path for all versions
-            source_data_path = (
-                Path(
-                    FACTOR_COSTEER_SETTINGS.data_folder_debug,
-                )
-                if data_type == "Debug"  # FIXME: (yx) don't think we should use a debug tag for this.
-                else Path(
-                    FACTOR_COSTEER_SETTINGS.data_folder,
-                )
-            )
+        # Resolve workspace to absolute path so all subprocess cwd and derived
+        # paths are unambiguous regardless of the caller's working directory.
+        ws_abs = Path(self.workspace_path).resolve()
 
-            # Use absolute path
+        # project root: quantaalpha/factors/coder/factor.py → 4 levels up
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
+
+        with FileLock(ws_abs / "execution.lock"):
+            raw_data_folder = (
+                FACTOR_COSTEER_SETTINGS.data_folder_debug
+                if data_type == "Debug"   # FIXME: (yx) don't think we should use a debug tag for this.
+                else FACTOR_COSTEER_SETTINGS.data_folder
+            )
+            # Resolve relative paths against the project root, not the cwd.
+            source_data_path = Path(raw_data_folder)
             if not source_data_path.is_absolute():
-                source_data_path = self.workspace_path.parent.parent.parent / source_data_path
+                source_data_path = (project_root / source_data_path).resolve()
             else:
-                source_data_path = Path(source_data_path).absolute()
+                source_data_path = source_data_path.resolve()
 
             source_data_path.mkdir(exist_ok=True, parents=True)
-            code_path = self.workspace_path / f"factor.py"
+            code_path = ws_abs / "factor.py"
 
             # Ensure data path exists and has files
             if source_data_path.exists() and any(source_data_path.iterdir()):
-                self.link_all_files_in_folder_to_workspace(source_data_path, self.workspace_path)
+                self.link_all_files_in_folder_to_workspace(source_data_path, ws_abs)
             else:
-                from quantaalpha.log import logger
+                from quantaalpha.log import logger  # lazy import — logger not always needed at module level
                 logger.warning(f"Data folder {source_data_path} does not exist or is empty. Skipping linking.")
 
             execution_feedback = self.FB_EXECUTION_SUCCEEDED
@@ -161,27 +165,26 @@ class FactorFBWorkspace(FBWorkspace):
             if self.target_task.version == 1:
                 execution_code_path = code_path
             elif self.target_task.version == 2:
-                execution_code_path = self.workspace_path / f"{uuid.uuid4()}.py"
+                execution_code_path = ws_abs / f"{uuid.uuid4()}.py"
                 execution_code_path.write_text((Path(__file__).parent / "factor_execution_template.txt").read_text())
 
             try:
-                # Set PYTHONPATH to include the project root so quantaalpha can be imported
-                import os
-                env = os.environ.copy()
-                project_root = Path(__file__).parent.parent.parent.parent.parent
-                pythonpath = str(project_root)
-                if 'PYTHONPATH' in env:
-                    env['PYTHONPATH'] = pythonpath + ':' + env['PYTHONPATH']
-                else:
-                    env['PYTHONPATH'] = pythonpath
-                
+                # Build env with PYTHONPATH pointing at the project root so
+                # `import quantaalpha` works inside the factor subprocess.
+                exec_env = os.environ.copy()
+                exec_env["PYTHONPATH"] = (
+                    str(project_root) + os.pathsep + exec_env.get("PYTHONPATH", "")
+                ).rstrip(os.pathsep)
+
+                # Use sys.executable (same conda-env interpreter running this
+                # process) rather than a bare `python` that may resolve to a
+                # different installation on PATH.
                 subprocess.check_output(
-                    f"{FACTOR_COSTEER_SETTINGS.python_bin} {execution_code_path}",
-                    shell=True,
-                    cwd=self.workspace_path,
+                    [sys.executable, str(execution_code_path)],
+                    cwd=str(ws_abs),
                     stderr=subprocess.STDOUT,
                     timeout=FACTOR_COSTEER_SETTINGS.file_based_execution_timeout,
-                    env=env,
+                    env=exec_env,
                 )
                 execution_success = True
             except subprocess.CalledProcessError as e:
@@ -207,7 +210,7 @@ class FactorFBWorkspace(FBWorkspace):
                 else:
                     execution_error = CustomRuntimeError(execution_feedback)
 
-            workspace_output_file_path = self.workspace_path / "result.h5"
+            workspace_output_file_path = ws_abs / "result.h5"
             if workspace_output_file_path.exists() and execution_success:
                 try:
                     executed_factor_value_dataframe = pd.read_hdf(workspace_output_file_path)

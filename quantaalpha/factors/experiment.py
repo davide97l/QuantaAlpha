@@ -36,6 +36,35 @@ class QlibFactorExperiment(_OrigQlibFactorExperiment):
 class QlibAlphaAgentScenario(QlibFactorScenario):
     """Scenario wrapper for AlphaAgent: accepts use_local; when True uses local get_data_folder_intro (no Docker)."""
 
+    def get_runtime_environment(self) -> str:
+        """Run rdagent's runtime_info.py via QlibLocalEnv.
+
+        rdagent's default implementation uses CondaConf which runs commands
+        through /bin/sh with a minimal PATH (:/bin/:/usr/bin/) — this causes
+        `timeout: command not found` on macOS where GNU coreutils is not on
+        that path.  We bypass that by running the script directly through
+        QlibLocalEnv, which inherits the full os.environ and uses Python's
+        subprocess timeout instead of the shell `timeout` binary.
+
+        Returns a plain-text environment description used only in LLM prompts.
+        On any error returns a safe fallback so scenario init never hard-fails.
+        """
+        try:
+            import tempfile
+            from pathlib import Path as _Path
+            import rdagent.scenarios.shared.runtime_info as _ri_mod
+            from quantaalpha.utils.env import QlibLocalEnv
+
+            runtime_info_text = _Path(_ri_mod.__file__).resolve().read_text()
+            local_env = QlibLocalEnv(timeout=60)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                (_Path(tmpdir) / "runtime_info.py").write_text(runtime_info_text)
+                return local_env.run(entry="python runtime_info.py", local_path=tmpdir) or ""
+        except Exception as exc:
+            from quantaalpha.log import logger
+            logger.warning(f"get_runtime_environment() failed (non-fatal): {exc}")
+            return "Python 3.10, qlib installed"
+
     def __init__(self, use_local: bool = True, *args, **kwargs):
         from rdagent.core.scenario import Scenario
         from quantaalpha.factors.qlib_utils import get_data_folder_intro as local_get_data_folder_intro

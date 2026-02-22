@@ -195,15 +195,40 @@ class QlibLocalEnv(LocalEnv):
             
         print(Rule("[bold green]Starting local execution[/bold green]", style="dark_orange"))
         
+        # Build subprocess env with a reliable PATH so utilities like `timeout`
+        # (GNU coreutils) and `qrun` are found on macOS even when the parent
+        # process was launched with a minimal PATH.
+        # Priority order:
+        #   /usr/local/bin  → Homebrew GNU coreutils (brew install coreutils)
+        #   <conda-env>/bin → correct Python + qrun for the active environment
+        #   original PATH   → everything else
+        subprocess_env = os.environ.copy()
+        subprocess_env.update(env)
+        prepend = []
+        if "/usr/local/bin" not in subprocess_env.get("PATH", ""):
+            prepend.append("/usr/local/bin")
+        # Determine conda env bin from CONDA_PREFIX (set by `conda activate`)
+        conda_prefix = subprocess_env.get("CONDA_PREFIX") or (
+            str(Path(subprocess_env["CONDA_BASE"]) / "envs" / subprocess_env["CONDA_ENV_NAME"])
+            if subprocess_env.get("CONDA_BASE") and subprocess_env.get("CONDA_ENV_NAME")
+            else ""
+        )
+        if conda_prefix:
+            conda_bin = str(Path(conda_prefix) / "bin")
+            if conda_bin not in subprocess_env.get("PATH", ""):
+                prepend.append(conda_bin)
+        if prepend:
+            subprocess_env["PATH"] = ":".join(prepend) + ":" + subprocess_env.get("PATH", "")
+
         try:
             # Run command with timeout
             result = subprocess.run(
-                command, 
-                cwd=cwd, 
-                env={**os.environ, **env}, 
-                capture_output=True, 
+                command,
+                cwd=cwd,
+                env=subprocess_env,
+                capture_output=True,
                 text=True,
-                timeout=exec_timeout
+                timeout=exec_timeout,
             )
             
             # Output result

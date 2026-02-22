@@ -608,6 +608,16 @@ class APIBackend:
         )
 
     def create_embedding(self, input_content: str | list[str], **kwargs: Any) -> list[Any] | Any:
+        # Fail immediately if no embedding model is configured instead of
+        # hitting the chat API endpoint and retrying 5+ times (each with a
+        # multi-second wait).  Callers such as the knowledge graph already
+        # catch and skip embedding failures gracefully.
+        if not self.embedding_model:
+            raise RuntimeError(
+                "No embedding model configured. "
+                "Set EMBEDDING_MODEL (and optionally EMBEDDING_API_KEY / EMBEDDING_BASE_URL) "
+                "in .env to enable RAG embeddings."
+            )
         input_content_list = [input_content] if isinstance(input_content, str) else input_content
         resp = self._try_create_chat_completion_or_embedding(
             input_content_list=input_content_list,

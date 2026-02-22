@@ -62,14 +62,16 @@ class MultiProcessEvolvingStrategy(EvolvingStrategy):
         **kwargs,
     ) -> EvolvingItem:
         # Find tasks to evolve
+        # When RAG is disabled (USE_RAG=False) queried_knowledge is None;
+        # treat that as empty knowledge — all tasks are new and need implementation.
         to_be_finished_task_index = []
         for index, target_task in enumerate(evo.sub_tasks):
             target_task_desc = target_task.get_task_information()
-            if target_task_desc in queried_knowledge.success_task_to_knowledge_dict:
+            if queried_knowledge is not None and target_task_desc in queried_knowledge.success_task_to_knowledge_dict:
                 evo.sub_workspace_list[index] = queried_knowledge.success_task_to_knowledge_dict[
                     target_task_desc
                 ].implementation
-            elif (
+            elif queried_knowledge is None or (
                 target_task_desc not in queried_knowledge.success_task_to_knowledge_dict
                 and target_task_desc not in queried_knowledge.failed_task_info_set
             ):

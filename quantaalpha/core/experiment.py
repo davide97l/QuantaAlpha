@@ -92,10 +92,8 @@ class FBWorkspace(Workspace):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        # code_dict stores injected files {filename: content} for reproducibility.
         self.code_dict: dict[str, Any] = {}
-        self.code_dict = (
-            {}
-        )  # The code injected into the folder, store them in the variable to reproduce the former result
         self.workspace_path: Path = RD_AGENT_SETTINGS.workspace_path / uuid.uuid4().hex
 
     @property
@@ -117,16 +115,38 @@ class FBWorkspace(Workspace):
 
     @staticmethod
     def link_all_files_in_folder_to_workspace(data_path: Path, workspace_path: Path) -> None:
-        data_path = Path(data_path).absolute()  # in case of relative path that will be invalid when we change cwd.
+        """Link (symlink) every file/dir in data_path into workspace_path.
+
+        Uses resolved absolute paths for both source and destination so that
+        symlinks remain valid regardless of the process working directory.
+        Falls back to copying when symlink creation fails (e.g. Windows without
+        Developer Mode, or a filesystem that doesn't support symlinks).
+        """
+        data_path = Path(data_path).resolve()   # absolute, resolves any symlink chains
         workspace_path = Path(workspace_path)
         for data_file_path in data_path.iterdir():
-            workspace_data_file_path = workspace_path / data_file_path.name
-            if workspace_data_file_path.exists():
-                workspace_data_file_path.unlink()
-            if platform.system() == "Linux":
-                os.symlink(data_file_path, workspace_data_file_path)
-            if platform.system() == "Windows":
-                os.link(data_file_path, workspace_data_file_path)
+            src = data_file_path.resolve()
+            dst = workspace_path / data_file_path.name
+
+            # Remove stale target if it already exists
+            try:
+                if dst.exists() or dst.is_symlink():
+                    shutil.rmtree(dst) if (dst.is_dir() and not dst.is_symlink()) else dst.unlink()
+            except Exception:
+                pass
+
+            try:
+                if platform.system() in ("Linux", "Darwin"):
+                    os.symlink(src, dst)
+                else:  # Windows
+                    try:
+                        os.symlink(src, dst)
+                    except Exception:
+                        # Hard-link files; copy dirs (no symlink privilege)
+                        os.link(src, dst) if src.is_file() else shutil.copytree(src, dst)
+            except Exception:
+                # Final fallback: copy into the workspace
+                shutil.copytree(src, dst) if src.is_dir() else shutil.copy2(src, dst)
 
     def inject_code(self, **files: str) -> None:
         """

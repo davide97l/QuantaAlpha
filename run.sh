@@ -1,4 +1,6 @@
 #!/bin/bash
+source /Users/davideliu/miniforge3/etc/profile.d/conda.sh
+conda activate quantaalpha
 # QuantaAlpha main experiment runner
 #
 # Usage:

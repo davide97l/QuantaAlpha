@@ -1,8 +1,10 @@
+import os
 import pickle
+import subprocess
 import sys
 from pathlib import Path
 from typing import List
-import os
+
 import pandas as pd
 from pandarallel import pandarallel
 
@@ -102,24 +104,27 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
                 for ws in exp.sub_workspace_list:
                     if not (ws.workspace_path / "result.h5").exists():
                         try:
-                            # Ensure symlink exists
-                            data_source = Path(FACTOR_COSTEER_SETTINGS.data_folder).absolute()
-                            if not data_source.is_absolute():
-                                data_source = Path(__file__).parent.parent.parent.parent.parent / FACTOR_COSTEER_SETTINGS.data_folder
+                            # Ensure daily_pv.h5 is linked into the workspace
+                            # (FactorFBWorkspace.execute normally does this, but
+                            # we need it here for the fallback direct execution).
+                            project_root = Path(__file__).resolve().parents[3]
+                            data_source = (project_root / FACTOR_COSTEER_SETTINGS.data_folder).resolve()
                             daily_pv_link = ws.workspace_path / "daily_pv.h5"
                             if not daily_pv_link.exists() and (data_source / "daily_pv.h5").exists():
                                 os.symlink(str(data_source / "daily_pv.h5"), str(daily_pv_link))
-                            
-                            # Execute factor
-                            import subprocess
-                            env = os.environ.copy()
-                            project_root = Path(__file__).parent.parent.parent.parent.parent
-                            env['PYTHONPATH'] = str(project_root) + os.pathsep + env.get('PYTHONPATH', '')
+
+                            # Use absolute cwd + script path so the subprocess
+                            # finds ./daily_pv.h5 and result.h5 correctly.
+                            ws_abs = Path(ws.workspace_path).resolve()
+                            exec_env = os.environ.copy()
+                            exec_env["PYTHONPATH"] = (
+                                str(project_root) + os.pathsep + exec_env.get("PYTHONPATH", "")
+                            ).rstrip(os.pathsep)
                             subprocess.check_output(
-                                [sys.executable, str(ws.workspace_path / 'factor.py')],
-                                cwd=str(ws.workspace_path),
+                                [sys.executable, str(ws_abs / "factor.py")],
+                                cwd=str(ws_abs),
                                 stderr=subprocess.STDOUT,
-                                env=env,
+                                env=exec_env,
                                 timeout=1200,
                             )
                         except Exception as exec_e:

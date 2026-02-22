@@ -2,6 +2,7 @@
 Model workflow with session control.
 """
 
+import os
 import time
 import pandas as pd
 from typing import Any
@@ -116,7 +117,13 @@ class AlphaAgentLoop(LoopBase, metaclass=LoopMeta):
             )
             logger.log_object(self.factor_constructor, tag="experiment generation")
 
-            self.coder: Developer = import_class(PROP_SETTING.coder)(scen)
+            # USE_RAG controls whether the CoSTEER loop uses the embedding-backed
+            # knowledge graph to retrieve past factor traces and inject them into
+            # prompts (see .env for full explanation).  Requires EMBEDDING_MODEL.
+            _use_rag = os.environ.get("USE_RAG", "false").strip().lower() in ("true", "1", "yes")
+            self.coder: Developer = import_class(PROP_SETTING.coder)(
+                scen, with_knowledge=_use_rag, knowledge_self_gen=_use_rag
+            )
             logger.log_object(self.coder, tag="coder")
             
             self.runner: Developer = import_class(PROP_SETTING.runner)(scen)
